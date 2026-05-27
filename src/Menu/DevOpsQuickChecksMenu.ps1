@@ -10,7 +10,7 @@ $ErrorActionPreference = "Continue"
 
 if (-not (Get-Module ConsoleUI)) { Import-Module (Join-Path $PSScriptRoot "..\UI\ConsoleUI.psm1") -Force -ErrorAction Stop }
 
-$script:RepoUrl  = "https://github.com/cronnpj/lab-scripts.git"
+$script:RepoUrl  = "https://github.com/SUNYMorrisville/lab-scripts.git"
 $script:Branch   = "main"
 $script:Target   = "labs\k8s-baremetal-lab\bootstrap.ps1"
 

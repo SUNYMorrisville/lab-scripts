@@ -639,7 +639,7 @@ function Remove-CitaWebDemo {
 # =========================
 # Menu
 # =========================
-$script:RepoUrl  = "https://github.com/cronnpj/lab-scripts.git"
+$script:RepoUrl  = "https://github.com/SUNYMorrisville/lab-scripts.git"
 $script:Branch   = "main"
 $script:Target   = "labs\k8s-baremetal-lab\bootstrap.ps1"
 $script:RepoPath = Resolve-DevOpsRepoPath -TargetRelativePath $script:Target
