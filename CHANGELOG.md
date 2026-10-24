@@ -2,6 +2,53 @@
 
 All notable changes to this repository are documented in this file.
 
+## v2026.10.23.1 - 2026-10-23
+
+### Fix — winget upgrade --all fails for per-user MSIX apps (Teams, WSL)
+
+- `winget upgrade --all --scope machine` fails with `0x80070005` for per-user MSIX packages because winget tries to provision them for all users. Machine scope is kept (it prevents the sysprep failures fixed in 3d94263); when that pass reports failures, Lab Tools now offers an opt-in retry without machine scope, defaulting to No and warning to skip it on VM templates. Applies to Windows Client Tools > Utilities [4] / `U4` (new `Invoke-WingetUpgradeAll` in [src/Menu/ClientToolsMenu.ps1](src/Menu/ClientToolsMenu.ps1)) and DevOps Install / Update [1] in [src/Menu/DevOpsInstallUpdateMenu.ps1](src/Menu/DevOpsInstallUpdateMenu.ps1).
+
+### Fixes — launch, update, and menus
+
+- [src/Launch-Elevated.vbs](src/Launch-Elevated.vbs): launch `%ProgramFiles%\PowerShell\7\pwsh.exe` by absolute path and fall back to Windows PowerShell. The desktop shortcut previously failed on machines without PowerShell 7, and the bare `pwsh.exe` name was resolved through the caller's PATH.
+- Quote script paths passed to `Start-Process` in [src/Launch-LabTools.ps1](src/Launch-LabTools.ps1), [src/Menu/MainMenu.ps1](src/Menu/MainMenu.ps1) (auto-update relaunch) and [src/Tasks/Update-LabTools.ps1](src/Tasks/Update-LabTools.ps1) (relaunch) so repo paths containing spaces work.
+- [src/Menu/MainMenu.ps1](src/Menu/MainMenu.ps1): a failed update from `U` no longer closes Lab Tools, and the update status refreshes afterwards. The update check skips `git fetch` when offline instead of freezing the menu. Global Search results for Sysprep, desktop wallpaper, and CITA 120 Lab 9 files now run (`VS`/`UW`/`UL` → `V5`/`U6`/`U7`).
+- [src/Menu/ClientToolsMenu.ps1](src/Menu/ClientToolsMenu.ps1): Sysprep stops if removing the Winget packages fails instead of launching Sysprep anyway; restarting Windows Update services and the VirtIO install now report failures. Consolidated the duplicated menu/search handlers into `Start-SysprepAfterWingetRemoval`, `Restart-WindowsUpdateServices`, and `Install-VirtIOGuestTools`. Fixed the elevated vmPing Public Desktop shortcut script, which was expanded too early and never parsed.
+- [src/Menu/MaintenanceMenu.ps1](src/Menu/MaintenanceMenu.ps1): options 1 and 5 report failed tasks instead of always showing success.
+- [src/UI/ConsoleUI.psm1](src/UI/ConsoleUI.psm1): uptime no longer rounds up to the next day; the TZ offset accounts for daylight saving time.
+
+### Fixes — DevOps / Kubernetes lab
+
+- [labs/k8s-baremetal-lab/bootstrap.ps1](labs/k8s-baremetal-lab/bootstrap.ps1): `Invoke-Talosctl` captures talosctl stderr on Windows PowerShell 5.1, so the x509/certificate guidance and the transient-error retries work. Answering N at the confirmation prompt exits with code 2 and the menu reports it as cancelled. Removing generated files keeps the tracked `student-overrides/README.md`.
+- [src/Menu/DevOpsToolsMenu.ps1](src/Menu/DevOpsToolsMenu.ps1):
+  - Automatic repo resets list the local changes and ask before discarding them (default No).
+  - "Nuke local generated files" (`a2`) now targets `labs\k8s-baremetal-lab\...`, asks for confirmation, and keeps `README.md`.
+  - kubectl probes no longer throw on 5.1 when a namespace is missing.
+  - A missing kubeconfig shows the friendly message instead of a parameter-binding error.
+  - `a7` returns to the submenu like `a1`–`a6`.
+  - Worker IP input splits on commas correctly.
+  - The dirty-repo hint points to the current reset option.
+  - The Git auto-install uses `--exact`.
+- [src/Menu/DevOpsQuickChecksMenu.ps1](src/Menu/DevOpsQuickChecksMenu.ps1): "Show installed versions" works on 5.1 and uses `talosctl version --client`.
+- [labs/k8s-baremetal-lab/README.md](labs/k8s-baremetal-lab/README.md): parameter names and default IPs match `bootstrap.ps1`.
+
+### Fixes — tasks
+
+- [src/Tasks/Set-StaticIP.ps1](src/Tasks/Set-StaticIP.ps1):
+  - IPv4 validation is strict. It rejects `192.168.1`, integer/hex forms, leading zeros, `0.0.0.0`, and `255.255.255.255`.
+  - Prefix length must be 1–32, and the gateway must be a usable address in the subnet. Both are checked before any changes are made.
+  - Re-applying the adapter's current address no longer fails the "in use" ping.
+  - If applying fails, the adapter is reverted to DHCP instead of being left with no address.
+- [src/Tasks/Rename-Computer.ps1](src/Tasks/Rename-Computer.ps1): allow-list validation (letters, digits, hyphens; not all digits; no leading/trailing hyphen).
+- [src/Tasks/Run-SDelete.ps1](src/Tasks/Run-SDelete.ps1): accepts `C:\` (trailing backslash was never trimmed).
+- [src/Tasks/Client/GPO-Report.ps1](src/Tasks/Client/GPO-Report.ps1): overwrites an existing report (`/f`) and reports gpresult failures.
+- [src/Tasks/Apply-TerminalBackground.ps1](src/Tasks/Apply-TerminalBackground.ps1): if `settings.json` can't be parsed, warn and leave it alone instead of replacing it.
+- Windows PowerShell 5.1 parse fixes: [src/Tasks/Client/Register-AutopilotDevice.ps1](src/Tasks/Client/Register-AutopilotDevice.ps1) (`?.`), [src/Tasks/Client/Set-DesktopWallpaper.ps1](src/Tasks/Client/Set-DesktopWallpaper.ps1) (non-ASCII dash in a string), [intune/winget/Setup-WingetUpgradeTask.ps1](intune/winget/Setup-WingetUpgradeTask.ps1) (`?.` in the generated script, so the nightly task never ran).
+- [intune/winget/Setup-WingetUpgradeTask.ps1](intune/winget/Setup-WingetUpgradeTask.ps1): the task principal uses SID `S-1-5-32-545` instead of the English group name, and a failed registration no longer reports success.
+
+### Version
+- Bumped [src/VERSION.txt](src/VERSION.txt) to `v2026.10.23.1`.
+
 ## v2026.05.05.1 - 2026-05-05
 
 ### New Feature — Add Control Plane Node to Existing Cluster
