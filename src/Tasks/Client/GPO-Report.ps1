@@ -28,7 +28,11 @@ try {
     $desktop = [Environment]::GetFolderPath("Desktop")
     $file = Join-Path $desktop "GPO-Report.html"
 
-    gpresult /h $file | Out-Null
+    # /f overwrites an existing report (gpresult refuses to overwrite without it)
+    gpresult /h $file /f | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "gpresult exited with code $LASTEXITCODE."
+    }
 
     Write-Host "Report generated successfully."
     Write-Host ("Saved to: {0}" -f $file)

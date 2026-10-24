@@ -13,7 +13,9 @@ function Test-IsAdministrator {
 
 function Ensure-GetWindowsAutopilotInfo {
     # Check if already installed as a script
-    $scriptPath = (Get-InstalledScript -Name "Get-WindowsAutopilotInfo" -ErrorAction SilentlyContinue)?.InstalledLocation
+    $scriptPath = $null
+    $installed = Get-InstalledScript -Name "Get-WindowsAutopilotInfo" -ErrorAction SilentlyContinue
+    if ($installed) { $scriptPath = $installed.InstalledLocation }
     if ($scriptPath) {
         $fullPath = Join-Path $scriptPath "Get-WindowsAutopilotInfo.ps1"
         if (Test-Path $fullPath) { return $fullPath }
@@ -29,7 +31,8 @@ function Ensure-GetWindowsAutopilotInfo {
 
     Install-Script -Name Get-WindowsAutopilotInfo -Force -Scope CurrentUser
 
-    $scriptPath = (Get-InstalledScript -Name "Get-WindowsAutopilotInfo" -ErrorAction SilentlyContinue)?.InstalledLocation
+    $installed = Get-InstalledScript -Name "Get-WindowsAutopilotInfo" -ErrorAction SilentlyContinue
+    if ($installed) { $scriptPath = $installed.InstalledLocation }
     if (-not $scriptPath) { throw "Installation succeeded but script path could not be resolved." }
 
     $fullPath = Join-Path $scriptPath "Get-WindowsAutopilotInfo.ps1"

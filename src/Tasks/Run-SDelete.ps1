@@ -35,10 +35,7 @@ try {
         $driveInput = "C:"
     }
 
-    $drive = $driveInput.Trim().ToUpper()
-    if ($drive.EndsWith("\\")) {
-        $drive = $drive.TrimEnd("\\")
-    }
+    $drive = $driveInput.Trim().ToUpper().TrimEnd('\')
     if (-not ($drive -match "^[A-Z]:$")) {
         throw "Invalid drive format '$driveInput'. Use format like C:"
     }

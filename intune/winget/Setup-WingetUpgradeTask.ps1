@@ -20,7 +20,10 @@ Add-Content -Path $logFile -Value "`n=== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss
 
 # Resolve winget via PATH first, then fall back to where.exe
 # Avoids WindowsApps ACL which blocks enumeration for non-SYSTEM accounts
-$wingetExe = (Get-Command winget -ErrorAction SilentlyContinue)?.Source
+# (No ?. operator here - this script runs under Windows PowerShell 5.1)
+$wingetExe = $null
+$wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+if ($wingetCmd) { $wingetExe = $wingetCmd.Source }
 if (-not $wingetExe) {
     $wingetExe = where.exe winget 2>$null | Select-Object -First 1
 }
@@ -56,8 +59,9 @@ $settings = New-ScheduledTaskSettingsSet `
 
 # RunLevel Limited avoids needing elevation to register the task when running as logged-on user.
 # Winget upgrades work without elevation for most packages.
+# S-1-5-32-545 = BUILTIN\Users (SID avoids failures on non-English Windows)
 $principal = New-ScheduledTaskPrincipal `
-    -GroupId "BUILTIN\Users" `
+    -GroupId "S-1-5-32-545" `
     -RunLevel Limited
 
 Register-ScheduledTask `
@@ -66,6 +70,7 @@ Register-ScheduledTask `
     -Trigger    $trigger `
     -Settings   $settings `
     -Principal  $principal `
-    -Description "Daily winget upgrade for all packages (runs as logged-on user)" | Out-Null
+    -Description "Daily winget upgrade for all packages (runs as logged-on user)" `
+    -ErrorAction Stop | Out-Null
 
 Write-Output "Scheduled task '$taskName' registered. Logs: $logDir\upgrade.log"

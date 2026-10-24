@@ -42,7 +42,7 @@ Write-Host ""
 if ($result -ne 0) {
     Write-Host "Desktop wallpaper applied." -ForegroundColor Green
 } else {
-    Write-Host "Warning: wallpaper API returned 0 — changes saved to registry but may require sign-out/sign-in." -ForegroundColor Yellow
+    Write-Host "Warning: wallpaper API returned 0 - changes saved to registry but may require sign-out/sign-in." -ForegroundColor Yellow
 }
 Write-Host "Source:  $imageSrc"
 Write-Host "Stored:  $imageDest"

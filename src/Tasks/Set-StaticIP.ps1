@@ -54,10 +54,45 @@ function Select-NetworkAdapter {
     }
 }
 
-function Assert-ValidIPv4([string]$label, [string]$value) {
+function Test-ValidIPv4([string]$value) {
+    # Dotted quad only. The round-trip check rejects forms TryParse would otherwise
+    # accept: shorthand ("192.168.1" -> 192.168.0.1), integers, hex, and leading zeros (octal).
+    if ($value -cnotmatch '^[0-9]{1,3}(\.[0-9]{1,3}){3}$') { return $false }
     $parsed = $null
-    if (-not [System.Net.IPAddress]::TryParse($value, [ref]$parsed) -or $parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+    if (-not [System.Net.IPAddress]::TryParse($value, [ref]$parsed)) { return $false }
+    if ($parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    if ($parsed.ToString() -ne $value) { return $false }
+    if ($value -eq "0.0.0.0" -or $value -eq "255.255.255.255") { return $false }
+    return $true
+}
+
+function Assert-ValidIPv4([string]$label, [string]$value) {
+    if (-not (Test-ValidIPv4 $value)) {
         throw "'$value' is not a valid IPv4 address for $label."
+    }
+}
+
+function Get-IPv4Int64([string]$value) {
+    $b = ([System.Net.IPAddress]::Parse($value)).GetAddressBytes()
+    return ([int64]$b[0] * 16777216) + ([int64]$b[1] * 65536) + ([int64]$b[2] * 256) + [int64]$b[3]
+}
+
+function Assert-GatewayInSubnet([string]$ipAddr, [int]$prefixLength, [string]$gateway) {
+    $blockSize = [int64][math]::Pow(2, 32 - $prefixLength)
+    $ipInt     = Get-IPv4Int64 $ipAddr
+    $gwInt     = Get-IPv4Int64 $gateway
+    $network   = $ipInt - ($ipInt % $blockSize)
+    $broadcast = $network + $blockSize - 1
+
+    # /31 and /32 have no separate network/broadcast addresses
+    if ($prefixLength -le 30 -and ($ipInt -eq $network -or $ipInt -eq $broadcast)) {
+        throw "'$ipAddr' is the network or broadcast address of its /$prefixLength subnet."
+    }
+    if ($gwInt -lt $network -or $gwInt -gt $broadcast) {
+        throw "Default gateway '$gateway' is not in the $ipAddr/$prefixLength subnet."
+    }
+    if ($gwInt -eq $ipInt -or ($prefixLength -le 30 -and ($gwInt -eq $network -or $gwInt -eq $broadcast))) {
+        throw "Default gateway '$gateway' is not a usable host address in the $ipAddr/$prefixLength subnet."
     }
 }
 
@@ -109,7 +144,11 @@ $dns2Raw   = Read-Host "DNS server (secondary, leave blank to skip)"
 $dns2Input = $dns2Raw.Trim()
 
 Assert-ValidIPv4 "IP address" $ip
+if ($prefix -lt 1 -or $prefix -gt 32) {
+    throw "Prefix length $prefix is out of range. Enter a value from 1 to 32 (e.g., 24)."
+}
 Assert-ValidIPv4 "Default gateway" $gw
+Assert-GatewayInSubnet $ip $prefix $gw
 Assert-ValidIPv4 "DNS server (primary)" $dnsInput
 if ($dns2Input -ne "") { Assert-ValidIPv4 "DNS server (secondary)" $dns2Input }
 
@@ -131,10 +170,19 @@ if ($confirm.Trim().ToUpper() -ne "Y") {
     return
 }
 
-# Duplicate / in-use check
+# Duplicate / in-use check (skipped when this adapter already holds the address,
+# since it would answer its own ping - e.g., converting a DHCP lease to static)
 Write-Host ""
-Write-Host "Checking if $ip is already in use..."
-if (Test-IPv4InUse -ip $ip) {
+$inUse = $false
+$alreadyAssigned = Get-NetIPAddress -InterfaceIndex $adapter.IfIndex -IPAddress $ip -AddressFamily IPv4 -ErrorAction SilentlyContinue
+if ($alreadyAssigned) {
+    Write-Host "$ip is already assigned to this adapter; skipping in-use check."
+}
+else {
+    Write-Host "Checking if $ip is already in use..."
+    $inUse = Test-IPv4InUse -ip $ip
+}
+if ($inUse) {
     Write-Host "WARNING: $ip responded to ping. It may already be in use."
     Write-Host "Pick a different IP to avoid a duplicate-address conflict."
     Write-LabLog "StaticIP: Aborted - IP appears in use ($ip)" "WARN"
@@ -154,32 +202,59 @@ if ($null -eq $verifiedAdapter -or $verifiedAdapter.Status -ne "Up") {
     return
 }
 
-# Remove existing IPv4 addresses (except APIPA) to avoid duplicates
-$existing = Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.IPAddress -notlike "169.254.*" }
+# Apply. Everything below removes the current config first, so on any failure
+# fall back to DHCP rather than leaving the adapter with no IPv4 address.
+try {
+    # Remove existing IPv4 addresses (except APIPA) to avoid duplicates
+    $existing = Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notlike "169.254.*" }
 
-foreach ($addr in $existing) {
-    Write-LabLog "StaticIP: Removing existing IPv4 address $($addr.IPAddress)"
-    Remove-NetIPAddress -InterfaceIndex $ifIndex -IPAddress $addr.IPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    foreach ($addr in $existing) {
+        Write-LabLog "StaticIP: Removing existing IPv4 address $($addr.IPAddress)"
+        Remove-NetIPAddress -InterfaceIndex $ifIndex -IPAddress $addr.IPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
+    # Remove default route(s) to prevent route conflicts
+    $routes = Get-NetRoute -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.DestinationPrefix -eq "0.0.0.0/0" }
+
+    foreach ($r in $routes) {
+        Write-LabLog "StaticIP: Removing default route 0.0.0.0/0"
+        Remove-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix "0.0.0.0/0" -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
+    Write-LabLog "StaticIP: Disabling DHCP on adapter $($adapter.Name)"
+    Set-NetIPInterface -InterfaceIndex $ifIndex -Dhcp Disabled -ErrorAction Stop
+
+    Write-LabLog "StaticIP: Setting IP $ip/$prefix GW $gw"
+    New-NetIPAddress -InterfaceIndex $ifIndex -IPAddress $ip -PrefixLength $prefix -DefaultGateway $gw -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+
+    Write-LabLog "StaticIP: Setting DNS server(s): $($dnsServers -join ', ')"
+    Set-DnsClientServerAddress -InterfaceIndex $ifIndex -ServerAddresses $dnsServers -ErrorAction Stop
 }
+catch {
+    $applyError = $_
+    Write-Host ""
+    Write-Host "Failed to apply static IP settings: $($applyError.Exception.Message)" -ForegroundColor Red
+    Write-Host "Reverting adapter '$($adapter.Name)' to DHCP so it is not left without an address..." -ForegroundColor Yellow
+    Write-LabLog "StaticIP: Apply failed ($($applyError.Exception.Message)) - reverting to DHCP" "ERROR"
 
-# Remove default route(s) to prevent route conflicts
-$routes = Get-NetRoute -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.DestinationPrefix -eq "0.0.0.0/0" }
-
-foreach ($r in $routes) {
-    Write-LabLog "StaticIP: Removing default route 0.0.0.0/0"
+    # Clear any partially applied static address/route, then hand the adapter back to DHCP
+    Remove-NetIPAddress -InterfaceIndex $ifIndex -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue
     Remove-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix "0.0.0.0/0" -Confirm:$false -ErrorAction SilentlyContinue
+    try {
+        Set-NetIPInterface -InterfaceIndex $ifIndex -Dhcp Enabled -ErrorAction Stop
+        Write-Host "DHCP re-enabled on '$($adapter.Name)'. Check ipconfig /all, then re-run with corrected values." -ForegroundColor Yellow
+        Write-LabLog "StaticIP: DHCP re-enabled on adapter $($adapter.Name)" "WARN"
+    }
+    catch {
+        Write-Host "Could not re-enable DHCP: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Configure the adapter manually (ncpa.cpl) before continuing." -ForegroundColor Red
+        Write-LabLog "StaticIP: Failed to re-enable DHCP ($($_.Exception.Message))" "ERROR"
+    }
+
+    throw $applyError
 }
-
-Write-LabLog "StaticIP: Disabling DHCP on adapter $($adapter.Name)"
-Set-NetIPInterface -InterfaceIndex $ifIndex -Dhcp Disabled -ErrorAction Stop
-
-Write-LabLog "StaticIP: Setting IP $ip/$prefix GW $gw"
-New-NetIPAddress -InterfaceIndex $ifIndex -IPAddress $ip -PrefixLength $prefix -DefaultGateway $gw -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-
-Write-LabLog "StaticIP: Setting DNS server(s): $($dnsServers -join ', ')"
-Set-DnsClientServerAddress -InterfaceIndex $ifIndex -ServerAddresses $dnsServers -ErrorAction Stop
 
 # Bounce adapter to apply cleanly
 Write-LabLog "StaticIP: Restarting adapter $($adapter.Name)"

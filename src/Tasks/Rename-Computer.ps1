@@ -22,14 +22,14 @@ if ([string]::IsNullOrWhiteSpace($newName)) {
 
 $newName = $newName.Trim()
 
-# Basic validation: Windows computer names are 1-15 chars, no special chars like \ / : * ? " < > |
+# Validation: 1-15 chars, letters/digits/hyphens only, not all digits, no leading/trailing hyphen
 if ($newName.Length -gt 15) {
     Write-Host "Name too long. Max 15 characters."
     Pause
     return
 }
-if ($newName -match '[\\\/\:\*\?\"<>\| ]') {
-    Write-Host "Invalid characters detected. Avoid spaces and special characters."
+if ($newName -cnotmatch '^(?!-)(?!\d+$)[A-Za-z0-9-]{1,15}(?<!-)$') {
+    Write-Host "Invalid name. Use only letters, numbers, and hyphens (not all numbers, no leading/trailing hyphen)."
     Pause
     return
 }

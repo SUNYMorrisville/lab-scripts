@@ -50,7 +50,12 @@ if (-not [string]::IsNullOrWhiteSpace($raw)) {
         $json = $raw | ConvertFrom-Json
     }
     catch {
-        $json = $null
+        # Don't overwrite: settings.json may contain comments/trailing commas this
+        # PowerShell version can't parse, and replacing it would wipe user profiles.
+        Write-Host "Warning: could not parse Windows Terminal settings.json; background not applied." -ForegroundColor DarkYellow
+        Write-Host "Settings: $settingsPath" -ForegroundColor DarkYellow
+        Write-Host $_.Exception.Message -ForegroundColor DarkYellow
+        return
     }
 }
 
