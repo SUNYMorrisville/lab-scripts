@@ -220,11 +220,12 @@ function Set-TalosContext {
 }
 
 function Invoke-Talosctl {
-  # Wraps talosctl with SilentlyContinue so PS5.1 NativeCommandError never
-  # fires before our own $LASTEXITCODE checks can run.
+  # Wraps talosctl with Continue so PS5.1 NativeCommandError never fires before
+  # our own $LASTEXITCODE checks run. (SilentlyContinue would drop stderr on 5.1,
+  # leaving the x509/retry matching below with no error text.)
   param([Parameter(ValueFromRemainingArguments=$true)][string[]]$TalosArgs)
   $prev = $ErrorActionPreference
-  $ErrorActionPreference = "SilentlyContinue"
+  $ErrorActionPreference = "Continue"
   $out = & talosctl @TalosArgs 2>&1
   $script:_talosExit = $LASTEXITCODE
   $ErrorActionPreference = $prev
@@ -882,7 +883,8 @@ function Remove-LocalGeneratedFiles {
   Write-Host "Removing local generated files (kubeconfig + student-overrides)..." -ForegroundColor Yellow
   Remove-Item -Force -ErrorAction SilentlyContinue $Kubeconfig
   if (Test-Path $OverridesDir) {
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $OverridesDir
+    # Keep the tracked README.md so the repo is not left dirty.
+    Get-ChildItem -Path $OverridesDir -Exclude "README.md" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -933,7 +935,8 @@ Write-Host ""
 $confirm = (Read-Host "Does this look correct? [Y/N]").Trim().ToUpper()
 if ($confirm -ne "Y") {
   Write-Host "Aborted. Re-run bootstrap with correct values." -ForegroundColor Yellow
-  return
+  # Exit code 2 = cancelled by user (the DevOps menu reports this as cancelled, not success).
+  exit 2
 }
 Write-Host ""
 

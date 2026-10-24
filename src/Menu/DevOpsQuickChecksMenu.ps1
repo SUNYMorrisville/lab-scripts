@@ -56,7 +56,11 @@ function Test-Cmd {
 }
 
 function Show-Versions {
-    if (Test-Cmd talosctl) { Write-Host ("talosctl: " + (& talosctl version 2>$null | Out-String).Trim()) -ForegroundColor Gray }
+    # Continue: under Stop, PS5.1 turns any native stderr (e.g. kubectl's removed --short flag) into a terminating error.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+
+    if (Test-Cmd talosctl) { Write-Host ("talosctl: " + (& talosctl version --client 2>$null | Out-String).Trim()) -ForegroundColor Gray }
     else { Write-Host "talosctl: (not installed)" -ForegroundColor DarkYellow }
 
     if (Test-Cmd kubectl) {
@@ -74,6 +78,8 @@ function Show-Versions {
 
     if (Test-Cmd git) { Write-Host ("git:     " + (& git --version 2>$null | Out-String).Trim()) -ForegroundColor Gray }
     else { Write-Host "git:     (not installed)" -ForegroundColor DarkYellow }
+
+    $ErrorActionPreference = $prevEap
 }
 
 function Resolve-DevOpsRepoPath {
@@ -147,7 +153,11 @@ function Assert-KubeconfigReady {
         throw "kubeconfig not found at $kubeconfig. Run option [9] in DevOps first."
     }
 
+    # Continue: under Stop, PS5.1 turns kubectl stderr into a terminating error.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $nodesCheck = & kubectl --kubeconfig $kubeconfig get nodes -o name 2>$null
+    $ErrorActionPreference = $prevEap
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($nodesCheck | Out-String).Trim())) {
         throw "Cluster is not reachable with current kubeconfig. Run option [9] in DevOps first."
     }

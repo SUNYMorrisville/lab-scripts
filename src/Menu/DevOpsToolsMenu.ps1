@@ -58,10 +58,18 @@ function Invoke-ActionSafe {
         Set-Status -Text "[Ready] $SuccessText" -Color "Green"
     }
     catch {
-        Set-Status -Text "[Error] Action failed" -Color "Red"
-        Write-Host ""
-        Write-Host "Error: Action failed." -ForegroundColor Red
-        Write-Host $_.Exception.ToString()
+        # User declined a confirmation prompt: report as cancelled, not failed.
+        if ($_.Exception -is [System.OperationCanceledException]) {
+            Set-Status -Text "[Cancelled] Action cancelled" -Color "Yellow"
+            Write-Host ""
+            Write-Host $_.Exception.Message -ForegroundColor Yellow
+        }
+        else {
+            Set-Status -Text "[Error] Action failed" -Color "Red"
+            Write-Host ""
+            Write-Host "Error: Action failed." -ForegroundColor Red
+            Write-Host $_.Exception.ToString()
+        }
     }
     finally {
         $ErrorActionPreference = $prev
@@ -117,7 +125,7 @@ function Install-WingetPackage {
     # Keeps catalog fresh; helps prevent "not found" issues on some machines.
     try { winget source update | Out-Null } catch {}
 
-    winget install -e --id $Id --scope machine --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+    winget install --exact --id $Id --scope machine --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
     if ($LASTEXITCODE -ne 0) {
         throw "winget install failed for id: $Id"
     }
@@ -182,6 +190,17 @@ function Reset-RepoToOrigin {
 
     Assert-ValidBranchName -Branch $Branch
 
+    # Show what would be discarded and require explicit consent (default No).
+    $changes = @(git -C $RepoPath status --porcelain 2>$null)
+    if ($changes.Count -gt 0) {
+        Write-Host "Local changes in ${RepoPath}:" -ForegroundColor DarkYellow
+        $changes | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkYellow }
+        $answer = Read-Host "Discard these changes and reset to origin/${Branch}? (y/N)"
+        if ($answer -notmatch '^(?i)y(es)?$') {
+            throw [System.OperationCanceledException]::new("Reset cancelled. Local changes were kept.")
+        }
+    }
+
     Write-Host "WARNING: Lab-safe reset will discard local changes in:" -ForegroundColor DarkYellow
     Write-Host "  $RepoPath" -ForegroundColor DarkYellow
     Write-Host "Resetting repo to origin/$Branch..." -ForegroundColor Yellow
@@ -220,7 +239,7 @@ function Repair-RepoState {
 
     if (Test-RepoDirty -RepoPath $RepoPath) {
         if ($AutoResetIfDirty) { Reset-RepoToOrigin -RepoPath $RepoPath -Branch $Branch }
-        else { throw "Repo has local changes. Run option [18] to reset, or stash/commit your changes." }
+        else { throw "Repo has local changes. Use DevOps > [A] Advanced Operations > [3] Repo lab-safe reset, or stash/commit your changes." }
     }
 }
 
@@ -269,6 +288,10 @@ function Invoke-RepoTarget {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $target @Arguments
     $code = $LASTEXITCODE
 
+    # bootstrap.ps1 exits 2 when the user answers N at its confirmation prompt.
+    if ($code -eq 2) {
+        throw [System.OperationCanceledException]::new("Cancelled at the bootstrap confirmation prompt. No cluster changes were made.")
+    }
     if ($code -ne 0) {
         throw "Target exited with code $code"
     }
@@ -503,12 +526,16 @@ function Assert-KubeconfigReady {
     }
 
     $kubeconfig = Resolve-KubeconfigPath -RepoPath $RepoPath
-    if (-not (Test-Path $kubeconfig)) {
-        throw "Prerequisite check failed: kubeconfig not found at $kubeconfig. Run option $HintOption first."
+    if (-not $kubeconfig -or -not (Test-Path $kubeconfig)) {
+        throw "Prerequisite check failed: kubeconfig not found at $(Join-Path $RepoPath 'labs\k8s-baremetal-lab\kubeconfig'). Run option $HintOption first."
     }
 
     if ($RequireReachable) {
+        # Continue: under Stop, PS5.1 turns kubectl stderr into a terminating error.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $nodesCheck = & kubectl --kubeconfig $kubeconfig get nodes -o name 2>$null
+        $ErrorActionPreference = $prevEap
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($nodesCheck | Out-String).Trim())) {
             throw "Prerequisite check failed: cluster is not reachable with current kubeconfig. Run option $HintOption first."
         }
@@ -610,7 +637,11 @@ function Remove-CitaWebDemo {
 
     $kubeconfig = Assert-KubeconfigReady -RepoPath $RepoPath -RequireReachable -HintOption "[9]"
 
+    # Continue: under Stop, PS5.1 turns kubectl's NotFound stderr into a terminating error.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $existsOut = & kubectl --kubeconfig $kubeconfig get namespace cita-web -o name 2>$null
+    $ErrorActionPreference = $prevEap
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($existsOut | Out-String).Trim())) {
         Write-Host "CITA web demo namespace (cita-web) does not exist. Nothing to remove." -ForegroundColor DarkYellow
         return
@@ -849,7 +880,7 @@ do {
                     $workerIps = @($defaultWorkerIps)
                 }
                 else {
-                    $workerIps = @($workersInput -split "\\s*,\\s*" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    $workerIps = @($workersInput -split '\s*,\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
                 }
 
                 if ($workerIps.Count -lt 1) {
@@ -984,6 +1015,7 @@ do {
                         -Arguments $invokeArgs
                 }
                 catch {
+                    if ($_.Exception -is [System.OperationCanceledException]) { throw }
                     Write-Host "" 
                     Write-Host "Portainer install failed." -ForegroundColor Red
                     if ($portainerMode -eq "I") {
@@ -1327,14 +1359,24 @@ do {
             Invoke-ActionSafe -SuccessText "Local generated files removed" -Action {
                 Initialize-RepoPrereqs -RepoUrl $script:RepoUrl -RepoPath $script:RepoPath -Branch $script:Branch -AutoResetIfDirty:$true
 
-                $kube = Join-Path $script:RepoPath "kubeconfig"
-                $ovr  = Join-Path $script:RepoPath "01-talos\student-overrides"
+                $labDir = Join-Path $script:RepoPath "labs\k8s-baremetal-lab"
+                $kube   = Join-Path $labDir "kubeconfig"
+                $ovr    = Join-Path $labDir "01-talos\student-overrides"
+
+                Write-Host "This will delete:" -ForegroundColor Yellow
+                Write-Host "  $kube" -ForegroundColor Yellow
+                Write-Host "  $ovr\* (keeps README.md)" -ForegroundColor Yellow
+                $confirm = Read-Host "Delete these generated files? (y/N)"
+                if ($confirm -notmatch '^(?i)y(es)?$') {
+                    throw [System.OperationCanceledException]::new("Cancelled. No generated files were removed.")
+                }
 
                 Remove-Item -Force -ErrorAction SilentlyContinue $kube
-                if (Test-Path $ovr) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ovr }
+                # Keep the tracked README.md so the repo is not left dirty.
+                if (Test-Path $ovr) { Get-ChildItem -Path $ovr -Exclude "README.md" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
 
                 Write-Host "Removed: $kube" -ForegroundColor Gray
-                Write-Host "Removed: $ovr"  -ForegroundColor Gray
+                Write-Host "Removed: $ovr\* (kept README.md)" -ForegroundColor Gray
             }
         }
 
@@ -1479,7 +1521,7 @@ Write-Host 'Type exit to close this window.' -ForegroundColor DarkGray
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($RunOption) -and -not [string]::IsNullOrWhiteSpace($choice) -and ($choice -in @("91","92","93","94","95","96","97","a1","a2","a3","a4","a5","a6"))) {
+    if ([string]::IsNullOrWhiteSpace($RunOption) -and -not [string]::IsNullOrWhiteSpace($choice) -and ($choice -in @("91","92","93","94","95","96","97","a1","a2","a3","a4","a5","a6","a7"))) {
         $back = $true
     }
 

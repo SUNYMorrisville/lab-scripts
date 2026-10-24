@@ -94,18 +94,19 @@ From the root of this repository:
 Default node IPs:
 
 * Control Plane: 192.168.1.3
-* Worker 1: 192.168.1.6
-* Worker 2: 192.168.1.7
+* Worker 1: 192.168.1.5
+* Worker 2: 192.168.1.6
 * VIP: 192.168.1.200
+* MetalLB pool: 192.168.1.200-192.168.1.220
 
 If you need to override:
 
 ```powershell
 .\bootstrap.ps1 `
-  -ControlPlaneIP 192.168.1.13 `
-  -Worker1IP 192.168.1.16 `
-  -Worker2IP 192.168.1.17 `
-  -VipIP 192.168.1.210
+  -ControlPlaneIPs 192.168.1.13 `
+  -WorkerIPs 192.168.1.16,192.168.1.17 `
+  -VipIP 192.168.1.210 `
+  -VipPoolRange 192.168.1.210-192.168.1.230
 ```
 
 ---
