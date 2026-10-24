@@ -110,7 +110,7 @@ function Write-TimezoneDateLine {
     )
 
     # Get timezone offset and date
-    $offset = [System.TimeZoneInfo]::Local.BaseUtcOffset
+    $offset = [System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now)
     $hours = $offset.Hours
     $minutes = $offset.Minutes
     if ($offset.TotalSeconds -ge 0) {
@@ -151,7 +151,7 @@ function Write-UptimeLine {
         $lastBoot = $osInfo.LastBootUpTime
         if ($null -eq $lastBoot) { throw "no boot time" }
         $uptime = (Get-Date) - $lastBoot
-        $days   = [int]$uptime.TotalDays
+        $days   = $uptime.Days
         $hours  = $uptime.Hours
         $mins   = $uptime.Minutes
 
@@ -928,7 +928,7 @@ function Write-DnsTzDateLine {
 
     # Col2: TZ
     $label2 = "TZ: "
-    $offset = [System.TimeZoneInfo]::Local.BaseUtcOffset
+    $offset = [System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now)
     $tzStr = if ($offset.TotalSeconds -ge 0) {
         "UTC+{0:D2}:{1:D2}" -f $offset.Hours, $offset.Minutes
     } else {
@@ -1210,7 +1210,7 @@ function Show-AppHeader {
         $lastBoot = $osInfo.LastBootUpTime
         if ($null -ne $lastBoot) {
             $uptime = (Get-Date) - $lastBoot
-            $days  = [int]$uptime.TotalDays
+            $days  = $uptime.Days
             $hours = $uptime.Hours
             $mins  = $uptime.Minutes
             if ($days -gt 0)       { $uptimeStr = "${days}d ${hours}h ${mins}m" }

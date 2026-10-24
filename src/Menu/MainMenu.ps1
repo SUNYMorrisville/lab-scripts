@@ -45,6 +45,9 @@ function Get-UpdateStatus {
         $repoPath = Get-RepoPath
         if (-not $repoPath) { return "NO_REPO" }
 
+        # Skip the blocking fetch when offline (not cached, so it re-checks once back online)
+        if (-not (Get-InternetStatus)) { return "UNKNOWN" }
+
         git -C $repoPath fetch --quiet 2>$null | Out-Null
 
         $branch = (git -C $repoPath rev-parse --abbrev-ref HEAD 2>$null).Trim()
@@ -233,14 +236,14 @@ function Get-GlobalSearchCatalog {
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "V2"; Area = "Windows Client Tools > VM & Image Prep"; Item = "Run VM template prep checklist"; Keywords = "template prep sysprep sdelete proxmox golden image" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "V3"; Area = "Windows Client Tools > VM & Image Prep"; Item = "Launch VMware Horizon OS Optimization Tool"; Keywords = "vmware horizon optimization tool osot install quiet" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "V4"; Area = "Windows Client Tools > VM & Image Prep"; Item = "Install VirtIO guest tools (Proxmox VM)"; Keywords = "virtio proxmox vm guest tools drivers redhat winget install" },
-        [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "VS"; Area = "Windows Client Tools > VM & Image Prep"; Item = "Run Sysprep"; Keywords = "sysprep oobe generalize shutdown winget remove" },
+        [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "V5"; Area = "Windows Client Tools > VM & Image Prep"; Item = "Run Sysprep"; Keywords = "sysprep oobe generalize shutdown winget remove" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U1"; Area = "Windows Client Tools > Utilities"; Item = "Launch vmPing"; Keywords = "vmping utility" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U2"; Area = "Windows Client Tools > Utilities"; Item = "Run Win11Debloat"; Keywords = "win11 debloat utility cleanup" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U3"; Area = "Windows Client Tools > Utilities"; Item = "Open winget command shell"; Keywords = "winget package manager search install uninstall list upgrade shell" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U4"; Area = "Windows Client Tools > Utilities"; Item = "Run winget upgrade --all"; Keywords = "winget upgrade all update packages" },
         [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U5"; Area = "Windows Client Tools > Utilities"; Item = "Open new terminal tab"; Keywords = "terminal tab windows terminal wt new tab" },
-        [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "UW"; Area = "Windows Client Tools > Utilities"; Item = "Apply CITA desktop wallpaper (disables Spotlight)"; Keywords = "wallpaper desktop background spotlight cita image apply" },
-        [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "UL"; Area = "Windows Client Tools > Utilities"; Item = "Copy CITA 120 Lab 9 files to Public Desktop"; Keywords = "cita 120 lab9 lab files copy desktop zip webpage" },
+        [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U6"; Area = "Windows Client Tools > Utilities"; Item = "Apply CITA desktop wallpaper (disables Spotlight)"; Keywords = "wallpaper desktop background spotlight cita image apply" },
+        [PSCustomObject]@{ Script = "ClientToolsMenu.ps1"; RunScript = "ClientToolsMenu.ps1"; RunOption = "U7"; Area = "Windows Client Tools > Utilities"; Item = "Copy CITA 120 Lab 9 files to Public Desktop"; Keywords = "cita 120 lab9 lab files copy desktop zip webpage" },
         [PSCustomObject]@{ Script = "TroubleshootingMenu.ps1"; RunScript = "TroubleshootingMenu.ps1"; RunOption = "T1"; Area = "Troubleshooting & Validation"; Item = "Show server role install status"; Keywords = "troubleshoot validation install status role status" },
         [PSCustomObject]@{ Script = "TroubleshootingMenu.ps1"; RunScript = "TroubleshootingMenu.ps1"; RunOption = "T2"; Area = "Troubleshooting & Validation"; Item = "System snapshot"; Keywords = "snapshot system inventory diagnostics" },
         [PSCustomObject]@{ Script = "DevOpsToolsMenu.ps1"; Area = "DevOps & Automation"; Item = "DevOps tooling, labs, and automation"; Keywords = "devops automation lab tools" },
@@ -425,7 +428,7 @@ function Invoke-StartupAutoUpdate {
         $launcher = Join-Path (Split-Path -Parent $PSScriptRoot) "Launch-LabTools.ps1"
         if (Test-Path $launcher) {
             $shell = if (Get-Command pwsh.exe -ErrorAction SilentlyContinue) { "pwsh.exe" } else { "powershell.exe" }
-            Start-Process -FilePath $shell -ArgumentList @("-NoLogo", "-ExecutionPolicy", "Bypass", "-File", $launcher)
+            Start-Process -FilePath $shell -ArgumentList @("-NoLogo", "-ExecutionPolicy", "Bypass", "-File", "`"$launcher`"")
             exit
         }
         else {
@@ -475,7 +478,9 @@ while ($true) {
         "u" {
             if ($menuState.UpdateAvailable) {
                 Show-AppHeader -Breadcrumb "Main Menu > Update Lab Tools"
-                & (Join-Path $PSScriptRoot "..\Tasks\Update-LabTools.ps1")
+                # Update-LabTools rethrows on failure; catch it so the main menu stays open
+                try { & (Join-Path $PSScriptRoot "..\Tasks\Update-LabTools.ps1") } catch { }
+                $script:UpdateStatusCache = $null
                 Read-Host "Press Enter to continue" | Out-Null
             }
             else {

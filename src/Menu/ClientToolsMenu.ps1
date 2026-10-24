@@ -88,6 +88,55 @@ function Assert-WingetAvailable {
     }
 }
 
+function Invoke-WingetUpgradeAll {
+    Assert-WingetAvailable
+
+    # Machine scope keeps installs machine-wide so VM templates still sysprep cleanly.
+    winget upgrade --all --scope machine
+    if ($LASTEXITCODE -eq 0) { return }
+
+    # Per-user MSIX apps (Teams, WSL) can't be provisioned machine-wide and fail above
+    # with 0x80070005. Updating them per-user breaks sysprep on a template, so opt-in only.
+    Write-Host ""
+    Write-Host "Some upgrades failed. Per-user apps (e.g. Teams, WSL) can only be upgraded per-user." -ForegroundColor Yellow
+    Write-Host "Skip this on a VM template you plan to sysprep." -ForegroundColor Yellow
+    $answer = Read-Host "Retry remaining upgrades without machine scope? (y/N)"
+    if ($answer -match '^(?i)y(es)?$') {
+        winget upgrade --all
+    }
+}
+
+function Install-VirtIOGuestTools {
+    Assert-WingetAvailable
+    winget install RedHat.VirtIO --source winget --scope machine
+    if ($LASTEXITCODE -ne 0) {
+        throw "winget install RedHat.VirtIO failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Restart-WindowsUpdateServices {
+    Write-Host "Restarting Windows Update services..."
+    Restart-Service wuauserv -Force -ErrorAction Stop
+    Restart-Service bits -Force -ErrorAction Stop
+    Get-Service wuauserv, bits | Format-Table Status, Name, DisplayName -AutoSize | Out-Host
+}
+
+function Start-SysprepAfterWingetRemoval {
+    $sysprepExePath = Join-Path $env:WINDIR "System32\Sysprep\Sysprep.exe"
+    if (-not (Test-Path $sysprepExePath)) {
+        throw "Sysprep.exe not found at '$sysprepExePath'."
+    }
+
+    # -ErrorAction Stop: if removal fails, Sysprep would fail on the leftover per-user package anyway.
+    Write-Host "Removing Winget AppxPackage (all users)..." -ForegroundColor Cyan
+    Get-AppxPackage -AllUsers -Name "*Winget*" -ErrorAction Stop | Remove-AppxPackage -AllUsers -ErrorAction Stop
+    Write-Host "Removing Winget provisioned package..." -ForegroundColor Cyan
+    Get-AppxProvisionedPackage -Online -ErrorAction Stop | Where-Object { $_.DisplayName -like "*Winget*" } | Remove-AppxProvisionedPackage -Online -ErrorAction Stop
+    Write-Host "Winget removal complete. Launching Sysprep..." -ForegroundColor Green
+    Write-Host "Use: Enter System Out-of-Box Experience (OOBE) + Generalize + Shutdown." -ForegroundColor DarkGray
+    Start-Process -FilePath $sysprepExePath | Out-Null
+}
+
 function Open-NewTerminalTabOrWindow {
     $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
     if ($wt) {
@@ -188,18 +237,20 @@ function Ensure-VmPingDesktopShortcuts {
 
             $escapedShortcutPath = $publicShortcutPath.Replace("'", "''")
             $escapedVmPingPath = $VmPingExePath.Replace("'", "''")
-            $elevatedScript = @"
+            # Literal here-string: only the two path placeholders are substituted.
+            $elevatedScript = @'
 $ErrorActionPreference = 'Stop'
-$shortcutPath = '$escapedShortcutPath'
-$targetPath = '$escapedVmPingPath'
+$shortcutPath = '__SHORTCUT_PATH__'
+$targetPath = '__TARGET_PATH__'
 $w = New-Object -ComObject WScript.Shell
 $s = $w.CreateShortcut($shortcutPath)
 $s.TargetPath = $targetPath
 $s.WorkingDirectory = Split-Path -Parent $targetPath
-$s.IconLocation = "$escapedVmPingPath,0"
+$s.IconLocation = "$targetPath,0"
 $s.Description = 'Launch vmPing'
 $s.Save()
-"@
+'@
+            $elevatedScript = $elevatedScript.Replace('__SHORTCUT_PATH__', $escapedShortcutPath).Replace('__TARGET_PATH__', $escapedVmPingPath)
 
             $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($elevatedScript))
 
@@ -485,10 +536,7 @@ function Invoke-SystemActionsMenu {
             "3"  {
                 Invoke-ActionSafe -Action {
                     Clear-Host
-                    Write-Host "Restarting Windows Update services..."
-                    Restart-Service wuauserv -Force
-                    Restart-Service bits -Force
-                    Get-Service wuauserv, bits | Format-Table Status, Name, DisplayName -AutoSize | Out-Host
+                    Restart-WindowsUpdateServices
                 } -SuccessText "Windows Update services restarted"
             }
             "4"  { Invoke-ActionSafe -Action { Clear-Host; sfc /scannow } -SuccessText "SFC completed (or started)" }
@@ -515,24 +563,13 @@ function Invoke-VMImagePrepMenu {
             "4" {
                 Invoke-ActionSafe -Action {
                     Clear-Host
-                    Assert-WingetAvailable
-                    winget install RedHat.VirtIO --source winget --scope machine
+                    Install-VirtIOGuestTools
                 } -SuccessText "VirtIO guest tools install completed"
             }
             "5" {
                 Invoke-ActionSafe -Action {
                     Clear-Host
-                    $sysprepExePath = Join-Path $env:WINDIR "System32\Sysprep\Sysprep.exe"
-                    if (-not (Test-Path $sysprepExePath)) {
-                        throw "Sysprep.exe not found at '$sysprepExePath'."
-                    }
-                    Write-Host "Removing Winget AppxPackage (all users)..." -ForegroundColor Cyan
-                    Get-AppxPackage -AllUsers -Name "*Winget*" | Remove-AppxPackage -AllUsers
-                    Write-Host "Removing Winget provisioned package..." -ForegroundColor Cyan
-                    Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*Winget*" } | Remove-AppxProvisionedPackage -Online
-                    Write-Host "Winget removal complete. Launching Sysprep..." -ForegroundColor Green
-                    Write-Host "Use: Enter System Out-of-Box Experience (OOBE) + Generalize + Shutdown." -ForegroundColor DarkGray
-                    Start-Process -FilePath $sysprepExePath | Out-Null
+                    Start-SysprepAfterWingetRemoval
                 } -SuccessText "Sysprep launched"
             }
             "0"  { $backSub = $true }
@@ -572,8 +609,7 @@ function Invoke-UtilitiesMenu {
             "4" {
                 Invoke-ActionSafe -Action {
                     Clear-Host
-                    Assert-WingetAvailable
-                    winget upgrade --all --scope machine
+                    Invoke-WingetUpgradeAll
                 } -SuccessText "winget upgrade --all completed"
             }
             "5" {
@@ -638,10 +674,7 @@ function Invoke-ClientRunOption {
         "S3" {
             Invoke-ActionSafe -Action {
                 Clear-Host
-                Write-Host "Restarting Windows Update services..."
-                Restart-Service wuauserv -Force
-                Restart-Service bits -Force
-                Get-Service wuauserv, bits | Format-Table Status, Name, DisplayName -AutoSize | Out-Host
+                Restart-WindowsUpdateServices
             } -SuccessText "Windows Update services restarted"
         }
         "S4" { Invoke-ActionSafe -Action { Clear-Host; sfc /scannow } -SuccessText "SFC completed (or started)" }
@@ -652,24 +685,13 @@ function Invoke-ClientRunOption {
         "V4" {
             Invoke-ActionSafe -Action {
                 Clear-Host
-                Assert-WingetAvailable
-                winget install RedHat.VirtIO --source winget --scope machine
+                Install-VirtIOGuestTools
             } -SuccessText "VirtIO guest tools install completed"
         }
         "V5" {
             Invoke-ActionSafe -Action {
                 Clear-Host
-                $sysprepExePath = Join-Path $env:WINDIR "System32\Sysprep\Sysprep.exe"
-                if (-not (Test-Path $sysprepExePath)) {
-                    throw "Sysprep.exe not found at '$sysprepExePath'."
-                }
-                Write-Host "Removing Winget AppxPackage (all users)..." -ForegroundColor Cyan
-                Get-AppxPackage -AllUsers -Name "*Winget*" | Remove-AppxPackage -AllUsers
-                Write-Host "Removing Winget provisioned package..." -ForegroundColor Cyan
-                Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*Winget*" } | Remove-AppxProvisionedPackage -Online
-                Write-Host "Winget removal complete. Launching Sysprep..." -ForegroundColor Green
-                Write-Host "Use: Enter System Out-of-Box Experience (OOBE) + Generalize + Shutdown." -ForegroundColor DarkGray
-                Start-Process -FilePath $sysprepExePath | Out-Null
+                Start-SysprepAfterWingetRemoval
             } -SuccessText "Sysprep launched"
         }
 
@@ -693,8 +715,7 @@ function Invoke-ClientRunOption {
         "U4" {
             Invoke-ActionSafe -Action {
                 Clear-Host
-                Assert-WingetAvailable
-                winget upgrade --all --scope machine
+                Invoke-WingetUpgradeAll
             } -SuccessText "winget upgrade --all completed"
         }
         "U5" {

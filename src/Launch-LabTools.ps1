@@ -55,10 +55,11 @@ if ($launchInWindowsTerminal) {
                 "new-tab",
                 "--title", "CITA-LabTools",
                 "--",
-                $preferredShellPath,
+                # Start-Process joins array elements without quoting, so quote paths here
+                "`"$preferredShellPath`"",
                 "-NoLogo",
                 "-ExecutionPolicy", "Bypass",
-                "-File", $mainMenuPath
+                "-File", "`"$mainMenuPath`""
             )
 
             Start-Process -FilePath $wt.Source -ArgumentList $wtArgs

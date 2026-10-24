@@ -51,12 +51,12 @@ function Install-WingetPackage {
     Write-Host "Installing $Id (machine scope)..." -ForegroundColor Cyan
     $proc = Start-Process -FilePath $winget -ArgumentList ($baseArgs + @("--scope", "machine")) `
         -Wait -PassThru -NoNewWindow
-    # 0x8A15010B = no upgrade available (already at latest) — treat as success
+    # 0x8A15002B = no upgrade available (already at latest) — treat as success
     $successCodes = @(0, 3010, 1641, -1978335189)
 
     if ($proc.ExitCode -in $successCodes) { return }
 
-    # 0x8A150013 = machine-scope blocked by system policy
+    # 0x8A150113 = machine-scope blocked by system policy
     if ($proc.ExitCode -eq -1978334957) {
         Write-Host "Machine-scope blocked by policy. Retrying with user scope..." -ForegroundColor Yellow
         $proc = Start-Process -FilePath $winget -ArgumentList ($baseArgs + @("--scope", "user")) `
@@ -226,6 +226,20 @@ while (-not $back) {
                     -Wait -PassThru -NoNewWindow
                 if ($proc.ExitCode -notin @(0, 3010, 1641)) {
                     Write-Host "winget upgrade exited with code $($proc.ExitCode) (some packages may have been skipped)." -ForegroundColor Yellow
+
+                    # Per-user MSIX apps (Teams, WSL) can't be provisioned machine-wide; a per-user
+                    # retry breaks sysprep on a VM template, so opt-in only.
+                    Write-Host "Per-user apps (e.g. Teams, WSL) can only be upgraded per-user. Skip this on a VM template you plan to sysprep." -ForegroundColor Yellow
+                    $answer = Read-Host "Retry remaining upgrades without machine scope? (y/N)"
+                    if ($answer -match '^(?i)y(es)?$') {
+                        $proc = Start-Process -FilePath $winget `
+                            -ArgumentList @("upgrade", "--all",
+                                "--accept-package-agreements", "--accept-source-agreements", "--silent") `
+                            -Wait -PassThru -NoNewWindow
+                        if ($proc.ExitCode -notin @(0, 3010, 1641)) {
+                            Write-Host "winget upgrade exited with code $($proc.ExitCode) (some packages may have been skipped)." -ForegroundColor Yellow
+                        }
+                    }
                 }
             }
         }

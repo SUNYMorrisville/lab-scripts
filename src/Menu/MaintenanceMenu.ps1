@@ -90,11 +90,22 @@ do {
 
     switch ($choice) {
             "1" {
+                # Each task overwrites the status, so record failures as they happen
+                $failedTasks = 0
                 Invoke-TaskSafe -Path $updateScript -SuccessText "Lab Tools updated from GitHub" -ShowPause:$false
+                if ($script:lastStatusText.StartsWith("[Error]")) { $failedTasks++ }
                 Invoke-TaskSafe -Path $shortcutScript -SuccessText "Shortcuts created/updated" -ShowPause:$false
+                if ($script:lastStatusText.StartsWith("[Error]")) { $failedTasks++ }
                 Invoke-TaskSafe -Path $terminalBackgroundScript -SuccessText "Terminal background applied" -ShowPause:$true
-                $script:lastStatusText  = "[Ready] All maintenance tasks completed"
-                $script:lastStatusColor = "Green"
+                if ($script:lastStatusText.StartsWith("[Error]")) { $failedTasks++ }
+                if ($failedTasks -gt 0) {
+                    $script:lastStatusText  = "[Error] $failedTasks maintenance task(s) failed"
+                    $script:lastStatusColor = "Red"
+                }
+                else {
+                    $script:lastStatusText  = "[Ready] All maintenance tasks completed"
+                    $script:lastStatusColor = "Green"
+                }
             }
         "2" { Invoke-TaskSafe -Path $shortcutScript -SuccessText "Shortcuts created/updated" }
         "3" { Invoke-TaskSafe -Path $terminalBackgroundScript -SuccessText "Terminal background applied" }
@@ -119,10 +130,19 @@ do {
             }
         }
         "5" {
+            $failedTasks = 0
             Invoke-TaskSafe -Path $installPowerShell7Script -SuccessText "PowerShell 7 + Graph modules verified" -ShowPause:$false
+            if ($script:lastStatusText.StartsWith("[Error]")) { $failedTasks++ }
             Invoke-TaskSafe -Path $shortcutScript -SuccessText "Shortcuts refreshed for preferred shell" -ShowPause:$true
-            $script:lastStatusText  = "[Ready] PowerShell 7/Graph module check completed and shortcuts refreshed"
-            $script:lastStatusColor = "Green"
+            if ($script:lastStatusText.StartsWith("[Error]")) { $failedTasks++ }
+            if ($failedTasks -gt 0) {
+                $script:lastStatusText  = "[Error] $failedTasks task(s) failed - see output above"
+                $script:lastStatusColor = "Red"
+            }
+            else {
+                $script:lastStatusText  = "[Ready] PowerShell 7/Graph module check completed and shortcuts refreshed"
+                $script:lastStatusColor = "Green"
+            }
         }
         "6" {
             Invoke-TaskSafe -Path $installPowerShell7OnlyScript -SuccessText "PowerShell 7 installation/repair completed"
